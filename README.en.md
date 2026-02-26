@@ -4,6 +4,8 @@
 
 A lightweight temporary file exchange site built on ASP.NET Core Minimal API — supports drag-and-drop upload and automatic expiry deletion. Developed with .NET 10, runs on Windows, macOS, and Linux, and supports Docker.
 
+[![Watch the demo](https://img.youtube.com/vi/vJaHwL3MlzQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=vJaHwL3MlzQ)
+
 ---
 
 ## Configuration

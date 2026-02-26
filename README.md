@@ -4,6 +4,8 @@
 
 基於 ASP.NET Core Minimal API 輕量級暫時檔案交換網站 — 支援拖放檔案上傳、自動過期刪除。使用 .NET 10 開發，可在 Windows、macOS、Linux 編譯及運行，支援 Docker 容器執行。
 
+[![操作示範](https://img.youtube.com/vi/vJaHwL3MlzQ/maxresdefault.jpg)](https://www.youtube.com/watch?v=vJaHwL3MlzQ)
+
 ---
 
 ## 設定 Configuration
