@@ -27,7 +27,7 @@ if (!Directory.Exists(dataPath))
 var expireSeconds = app.Configuration.GetValue<int>("FileCleanup:ExpireSeconds", 60);
 
 // SSE 連線管理
-var sseClients = new ConcurrentBag<HttpResponse>();
+var sseClients = new ConcurrentDictionary<HttpResponse, byte>();
 
 async Task BroadcastSseMessage(string eventType, string data)
 {
@@ -36,7 +36,7 @@ async Task BroadcastSseMessage(string eventType, string data)
 
     var toRemove = new List<HttpResponse>();
 
-    foreach (var client in sseClients)
+    foreach (var client in sseClients.Keys)
     {
         try
         {
@@ -45,6 +45,7 @@ async Task BroadcastSseMessage(string eventType, string data)
         }
         catch
         {
+            logger.Warn($"Failed to send SSE message to client {client.HttpContext.Connection.RemoteIpAddress}, marking for removal");
             toRemove.Add(client);
         }
     }
@@ -52,7 +53,7 @@ async Task BroadcastSseMessage(string eventType, string data)
     // 移除斷線的客戶端
     foreach (var client in toRemove)
     {
-        sseClients.TryTake(out _);
+        sseClients.TryRemove(client, out _);
     }
 }
 
@@ -99,7 +100,7 @@ app.MapGet("/events", async (HttpContext context, IHostApplicationLifetime lifet
     context.Response.Headers.Append("Cache-Control", "no-cache");
     context.Response.Headers.Append("Connection", "keep-alive");
 
-    sseClients.Add(context.Response);
+    sseClients.TryAdd(context.Response, 0);
 
     // 發送連線成功訊息
     var connectMessage = Encoding.UTF8.GetBytes("event: connected\ndata: {\"status\":\"connected\"}\n\n");
@@ -112,7 +113,7 @@ app.MapGet("/events", async (HttpContext context, IHostApplicationLifetime lifet
         lifetime.ApplicationStopping);
 
     // 連線中斷或 App 停止時，從列表中移除客戶端
-    linkedCts.Token.Register(() => sseClients.TryTake(out _));
+    linkedCts.Token.Register(() => sseClients.TryRemove(context.Response, out _));
 
     // 連線中斷或 App 停止時，結束執行
     var tcs = new TaskCompletionSource();
