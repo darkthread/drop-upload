@@ -18,10 +18,12 @@ app.UseFileServer();
 app.UseMiddleware<AccessKeyMiddleware>();
 
 var dataPath = Path.Combine(app.Environment.ContentRootPath, "Data");
+var tempPath = Path.Combine(dataPath, "temp");
 if (!Directory.Exists(dataPath))
 {
     Directory.CreateDirectory(dataPath);
 }
+Directory.CreateDirectory(tempPath);
 
 // 讀取過期時間設定（秒）
 var expireSeconds = app.Configuration.GetValue<int>("FileCleanup:ExpireSeconds", 60);
@@ -134,43 +136,6 @@ app.MapGet("/files", () =>
     return Results.Ok(new { files });
 });
 
-app.MapPost("/upload", async (HttpRequest request) =>
-{
-    if (!request.HasFormContentType)
-    {
-        return Results.BadRequest(new { error = "Invalid content type" });
-    }
-
-    var form = await request.ReadFormAsync();
-    var file = form.Files.FirstOrDefault();
-
-    if (file == null || file.Length == 0)
-    {
-        return Results.BadRequest(new { error = "No file uploaded" });
-    }
-
-    var safeFileName = Path.GetFileName(file.FileName);
-
-    var filePath = Path.Combine(dataPath, safeFileName);
-
-    using (var stream = new FileStream(filePath, FileMode.Create))
-    {
-        await file.CopyToAsync(stream);
-    }
-
-    // 廣播檔案上傳通知
-    await BroadcastSseMessage("fileUploaded", $"{{\"fileName\":\"{safeFileName}\"}}");
-
-    logger.Info($"[{request.HttpContext.GetClientIp()}] File uploaded: {safeFileName} ({file.Length} bytes)");
-
-    return Results.Ok(new
-    {
-        success = true,
-        fileName = safeFileName,
-        size = file.Length
-    });
-});
-
 app.MapPost("/upload-chunk", async (HttpRequest request) =>
 {
     if (!request.HasFormContentType)
@@ -179,36 +144,36 @@ app.MapPost("/upload-chunk", async (HttpRequest request) =>
     var form = await request.ReadFormAsync();
     var chunkData = form.Files.FirstOrDefault();
     var fileName = Path.GetFileName(form["fileName"].ToString());
-    var uploadId = form["uploadId"].ToString();
+    var uploadId = Path.GetFileName(form["uploadId"].ToString());
 
-    if (!int.TryParse(form["chunkIndex"], out var chunkIndex) ||
-        !int.TryParse(form["totalChunks"], out var totalChunks))
-        return Results.BadRequest(new { error = "Invalid chunk parameters" });
+    if (!long.TryParse(form["pos"], out var pos) ||
+        !long.TryParse(form["size"], out var totalSize))
+        return Results.BadRequest(new { error = "Invalid pos/size parameters" });
 
     if (chunkData == null || string.IsNullOrEmpty(fileName) || string.IsNullOrEmpty(uploadId))
         return Results.BadRequest(new { error = "Missing required fields" });
 
-    var chunkDir = Path.Combine(dataPath, "_chunks", uploadId);
-    Directory.CreateDirectory(chunkDir);
+    var tempFile = Path.Combine(tempPath, uploadId + ".tmp");
+    var finalPath = Path.Combine(dataPath, fileName);
 
-    var chunkPath = Path.Combine(chunkDir, $"{chunkIndex:D6}");
-    using (var stream = new FileStream(chunkPath, FileMode.Create))
-        await chunkData.CopyToAsync(stream);
-
-    // 全部 Chunk 收到後合併
-    if (Directory.GetFiles(chunkDir).Length == totalChunks)
+    // 驗證目前長度與 pos 相符，然後在其後方繼續寫入
+    using (var stream = new FileStream(tempFile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None))
     {
-        var finalPath = Path.Combine(dataPath, fileName);
-        using (var finalStream = new FileStream(finalPath, FileMode.Create))
-        {
-            for (int i = 0; i < totalChunks; i++)
-            {
-                var cp = Path.Combine(chunkDir, $"{i:D6}");
-                using var cs = new FileStream(cp, FileMode.Open);
-                await cs.CopyToAsync(finalStream);
-            }
-        }
-        Directory.Delete(chunkDir, true);
+        if (stream.Length != pos)
+            return Results.BadRequest(new { error = $"Position mismatch: expected {pos}, got {stream.Length}" });
+
+        stream.Seek(0, SeekOrigin.End);
+        await chunkData.CopyToAsync(stream);
+    }
+
+    bool complete = pos + chunkData.Length >= totalSize;
+
+    // 全部完成，複製到正式位置
+    if (complete)
+    {
+        if (File.Exists(finalPath)) File.Delete(finalPath);
+        File.Copy(tempFile, finalPath);
+        File.Delete(tempFile);
 
         var fileSize = new FileInfo(finalPath).Length;
         await BroadcastSseMessage("fileUploaded", $"{{\"fileName\":\"{fileName}\"}}");
@@ -217,7 +182,7 @@ app.MapPost("/upload-chunk", async (HttpRequest request) =>
         return Results.Ok(new { success = true, fileName, size = fileSize, complete = true });
     }
 
-    return Results.Ok(new { success = true, chunkIndex, complete = false });
+    return Results.Ok(new { success = true, complete = false });
 });
 
 app.MapGet("/download/", ([FromQuery(Name = "f")] string filename, HttpRequest request) =>

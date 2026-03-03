@@ -351,8 +351,8 @@
                     formData.append('file', chunk);
                     formData.append('fileName', file.name);
                     formData.append('uploadId', uploadId);
-                    formData.append('chunkIndex', i);
-                    formData.append('totalChunks', totalChunks);
+                    formData.append('pos', start);
+                    formData.append('size', file.size);
 
                     const response = await fetch('upload-chunk', {
                         method: 'POST',
